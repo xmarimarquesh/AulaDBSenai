@@ -114,7 +114,6 @@ select * from promocoes;
 select * from clientes;
 select * from produtos;
 
-
 -- 1.Registrar uma nova venda e atualizar o valor total de compras por cliente.
 DELIMITER //
 CREATE TRIGGER trg_AtualizarValorTotal
@@ -140,30 +139,171 @@ BEFORE INSERT
 ON vendas
 FOR EACH ROW
 BEGIN
-	DECLARE desconto DECIMAL(5,2);
+	DECLARE desconto DECIMAL;
     SET desconto = 0;
 
     SELECT p.desconto INTO desconto FROM promocoes p
     WHERE NEW.data_venda >= p.data_inicio AND NEW.data_venda <= p.data_fim LIMIT 1;
 
-    SET NEW.valor_total = NEW.valor_total - (NEW.valor_total * (desconto / 100))/ 100;
+    SET NEW.valor_total = NEW.valor_total - NEW.valor_total * (desconto / 100);
 END;
 //
 DELIMITER ;
 
-INSERT INTO vendas (id_produto, id_cliente, data_venda, quantidade, valor_total) VALUES (1, 1, '2024-08-10', 1, 5000);
+INSERT INTO vendas (id_produto, id_cliente, data_venda, quantidade, valor_total) VALUES (1, 3, '2024-08-10', 1, 500);
 
 -- 3.Atualizar o preço médio de um produto após uma nova venda.
+ALTER TABLE produtos
+ADD COLUMN preco_medio float;
+
+drop trigger trg_PrecoMedio;
+
+DELIMITER //
+CREATE TRIGGER trg_PrecoMedio
+AFTER INSERT
+ON vendas
+FOR EACH ROW
+BEGIN
+	UPDATE produtos p 
+    SET preco_medio = (select avg(valor_total) from vendas where id_produto = new.id_produto)
+    where id_produto = new.id_produto;
+END;
+//
+DELIMITER ;
+
+INSERT INTO vendas (id_produto, id_cliente, data_venda, quantidade, valor_total) VALUES (1, 1, '2024-08-10', 1, 500);
 
 -- 4.Rastrear alterações no estoque de produtos e registrar uma notificação dentro de um log.
+DROP trigger trg_AlterarEstoque;
+DELIMITER //
+CREATE TRIGGER trg_AlterarEstoque
+BEFORE UPDATE
+ON produtos
+FOR EACH ROW
+BEGIN
+	insert into notificacoes(mensagem, data_notificacao) values (CONCAT("Estoque do produto ",new.id_produto," alterado. Estoque antigo: ",(select quantidade_estoque from produtos where id_produto = new.id_produto), " Estoque atual: ", new.quantidade_estoque), curdate());
+END;
+//
+DELIMITER ;
+
+update produtos
+set quantidade_estoque = quantidade_estoque - 1
+where id_produto = 1;
 
 -- 5.Registrar novos clientes e gerar uma mensagem de usuário cadastrado dentro de um log.
+CREATE TABLE logCadastroUsuarios(
+id_cadastro int primary key not null auto_increment,
+id_cliente int,
+nome varchar(255),
+descricao varchar(255),
+foreign key (id_cliente) references clientes(id_cliente)
+);
+
+drop table logCadastroUsuarios;
+drop trigger trg_UsuarioCadastrado;
+
+DELIMITER //
+CREATE TRIGGER trg_UsuarioCadastrado
+AFTER INSERT
+ON
+clientes
+FOR EACH ROW
+BEGIN
+	INSERT INTO logCadastroUsuarios (id_cliente, nome, descricao) values (new.id_cliente, new.nome, "Usuario Cadastrado");
+END;
+//
+DELIMITER ;
+
+insert into clientes(nome, email, telefone, valor_total_compras) values ('Mariana', 'mariana@example.com', '98765431', 15000.00);
+select * from logCadastroUsuarios;
 
 -- 6.Monitorar vendas de produtos em promoção e registrar uma notificação.
+select * from vendas;
+select * from notificacoes;
+select * from promocoes;
+select * from clientes;
+select * from produtos;
+
+drop trigger trg_PromocaoProdutos;
+ 
+DELIMITER //
+CREATE TRIGGER trg_PromocaoProdutos
+AFTER INSERT ON vendas
+FOR EACH ROW
+BEGIN
+	IF( NEW.data_venda >= (select data_inicio from promocoes p where NEW.data_venda >= p.data_inicio AND NEW.data_venda <= p.data_fim LIMIT 1) AND NEW.data_venda <= (select data_fim from promocoes p where NEW.data_venda >= p.data_inicio AND NEW.data_venda <= p.data_fim LIMIT 1)) THEN
+		insert into notificacoes (mensagem, data_notificacao) VALUES (CONCAT("O produto ", (SELECT v.id_produto FROM vendas v inner join promocoes p on NEW.data_venda >= p.data_inicio AND NEW.data_venda <= p.data_fim WHERE NEW.data_venda >= p.data_inicio AND NEW.data_venda <= p.data_fim LIMIT 1), " foi vendido com promocao"), curdate());
+	end if;
+END;
+//
+DELIMITER ;
+
+INSERT INTO vendas (id_produto, id_cliente, data_venda, quantidade, valor_total) VALUES (2, 2, '2024-07-01', 1, 2999.99);
+
 
 -- 7.Registrar produtos em falta no estoque e gerar uma notificação.
+drop trigger trg_produtosEmFalta;
+DELIMITER //
+CREATE TRIGGER trg_produtosEmFalta 
+AFTER UPDATE ON
+produtos
+FOR EACH ROW
+BEGIN
+	IF (new.quantidade_estoque < 1) THEN
+	INSERT INTO notificacoes (mensagem, data_notificacao) VALUES (CONCAT("Estoque do produto ", new.id_produto, " em falta."), curdate());
+	END IF;
+END;
+//
+DELIMITER ;
+
+update produtos
+set quantidade_estoque = 0
+where id_produto = 2;
+
+select * from notificacoes;
 
 -- 8.Atualizar o valor total de vendas de um produto após uma nova venda.
+alter table produtos
+add column valor_total_vendas float;
+
+drop trigger trg_AtualizarValorTotal;
+
+DELIMITER //
+CREATE TRIGGER trg_AtualizarValorTotal
+AFTER INSERT
+ON vendas
+FOR EACH ROW
+BEGIN
+	UPDATE produtos p
+    set p.valor_total_vendas = (select sum(valor_total) from vendas where id_produto = new.id_produto)
+    where p.id_produto = new.id_produto;
+END;
+//
+DELIMITER ;
+
+INSERT INTO vendas (id_produto, id_cliente, data_venda, quantidade, valor_total) VALUES (1, 2, '2024-08-10', 1, 2999.99);
 
 -- 9.Rastrear alterações no valor de produtos e registrar uma notificação.
+DELIMITER //
+CREATE TRIGGER trg_AlterarValorProduto
+BEFORE UPDATE ON produtos
+FOR EACH ROW
+BEGIN
+	IF((select preco from produtos where id_produto = new.id_produto) != new.preco) then
+		INSERT INTO notificacoes (mensagem, data_notificacao) values (CONCAT("Valor do produto ",new.id_produto, " alterado. Antes: ",  (select preco from produtos where id_produto = new.id_produto), " Depois: ", new.preco),curdate());
+	END IF;
+END;
+//
+DELIMITER ;
+
+update produtos
+set preco = 30
+where id_produto = 5;
+
+
+
+
+
+
+
 
