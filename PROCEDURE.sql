@@ -112,26 +112,97 @@ INSERT INTO Multas (valor, pontos, data_aplicacao, infracao_id) VALUES
 (250.00, 6, '2024-04-28', 9),
 (120.00, 4, '2024-04-29', 10);
 
+-- -----------------------------------------------------------------------------------------------------------------------------
+set sql_safe_updates = 0;
 
--- Inserir um novo veículo e seu proprietário (com trigger)
+create table logNotificacoes(
+	IDNotificacoes int not null primary key auto_increment,
+	descricao varchar(255),
+    data_notificacao date
+);
+
+-- -----------------------------------------------------------------------------------------------------------------------------
+
+-- Inserir um novo veículo e seu proprietário (com trigger) --------------------------------------------------------------------
 
 DELIMITER //
 CREATE PROCEDURE setVeiculoProprietario(marca varchar(30), modelo varchar(30), placa char(7), ano int, id_proprietario int)
 BEGIN
-	INSERT INTO veiculos VALUES (marca, ano, modelo, placa, ano, id_proprietario);
+	INSERT INTO veiculos(marca, modelo, placa, ano, proprietario_id) VALUES (marca, modelo, placa, ano, id_proprietario);
 END
 // DELIMITER ;
 
--- Deletar um veículo e suas multas associadas (com trigger)
 
+DELIMITER //
+create trigger trg_setVeiculoProprietario
+AFTER INSERT ON veiculos
+FOR EACH ROW
+BEGIN
+	insert into logNotificacoes (descricao, data_notificacao) values (CONCAT("O veiculo ", new.id, " foi adicionado. Placa: ", new.placa), curdate());
+END;
+// DELIMITER ; 
 
--- Inserir uma nova infração e atualizar multas associadas (com trigger)
+call setVeiculoProprietario("Fiat", "Siena", "APO1234", 2008, 3);
 
--- Atualizar pontos na carteira de um proprietário específico que levou uma multa(com trigger)
+select * from veiculos;
 
--- Deletar um proprietário e seus veículos associados (com trigger)
+select * from logNotificacoes;
 
--- Selecionar veículos com licenciamento expirado
+-- Deletar um veículo e suas multas associadas (com trigger) -------------------------------------------------------------------
+DELIMITER //
+CREATE PROCEDURE delVeiculo(id_veiculo int)
+BEGIN
+	delete from multas where infracao_id in (select id from infracoes where veiculo_id = id_veiculo);
+    delete from infracoes i where i.veiculo_id = id_veiculo;
+    delete from licenciamentos l where l.veiculo_id = id_veiculo;
+    delete from veiculos v where id = id_veiculo;
+END;
+// DELIMITER ;
+
+call delVeiculo(2);
+
+-- Inserir uma nova infração e atualizar multas associadas (com trigger) -------------------------------------------------------
+DELIMITER //
+CREATE PROCEDURE inserirInfracaoAtualizarMultas(descricao varchar(255), gravidade varchar(10), data_ocorrencia date, veiculo_id int, valor DECIMAL(10, 2), pontos int, data_aplicacao date, infracao_id int)
+BEGIN
+	insert into infracoes(descricao, gravidade, data_ocorrencia, veiculo_id) values (descricao, gravidade, data_ocorrencia, veiculo_id);
+    insert into multas (valor, pontos, data_aplicacao, infracao_id) values (valor, pontos, data_aplicacao, infracao_id);
+END;
+// DELIMITER ;
+
+call inserirInfracaoAtualizarMultas("Parar veiculo em via de alta velocidade", "Grave", '2024-08-20', 2, 121, 3, '2024-08-20', 2);
+drop procedure inserirInfracaoAtualizarMultas;
+
+-- Atualizar pontos na carteira de um proprietário específico que levou uma multa(com trigger) ---------------------------------
+
+DELIMITER //
+create procedure update_carteira(id_prop int)
+begin
+    update propietarios
+    set pontos_cartreira = (select sum(pontos) from multas where infracao_id in
+    (select id from infracoes where veiculo_id in
+    (select id from veiculos where proprietario_id = id_prop)))
+    where id = id_prop;
+end;
+// DELIMITER ;
+
+-- Deletar um proprietário e seus veículos associados (com trigger) ------------------------------------------------------------
+DELIMITER //
+CREATE PROCEDURE delProprietario(id_prop int)
+BEGIN
+	delete from multas where infracao_id in (select id from infracoes where veiculo_id in (select id from veiculos where proprietario_id = id_prop));
+    delete from infracoes where veiculo_id in (select id from veiculos where proprietario_id = id_prop);
+    delete from licenciamentos where veiculo_id in (select id from veiculos where proprietario_id = id_prop);
+    delete from veiculos where proprietario_id = id_prop;
+    delete from proprietarios where id = id_prop;
+END;
+// DELIMITER ;
+
+drop procedure delProprietario;
+
+call delProprietario(4);
+
+-- Selecionar veículos com licenciamento expirado ------------------------------------------------------------------------------
 DELIMITER //
 CREATE PROCEDURE LicenciamentoExpirado(ano date)
 begin
@@ -143,7 +214,7 @@ end;
 
 call LicenciamentoExpirado('2024-04-20');
 
--- Selecionar veículos que possuem multas graves
+-- Selecionar veículos que possuem multas graves -------------------------------------------------------------------------------
 DELIMITER //
 CREATE PROCEDURE VeiculosMultasGraves(gravidade varchar(30))
 begin
@@ -155,7 +226,7 @@ end;
 
 call VeiculosMultasGraves("Gravíssima");
 
--- Selecionar veículos acima de 2021 
+-- Selecionar veículos acima de 2021 ------------------------------------------------------------------------------------------
 DELIMITER //
 CREATE PROCEDURE VeiculosAno(ano_parametro int)
 BEGIN
@@ -166,7 +237,7 @@ END;
 
 call VeiculosAno(2021);
 
--- Selecionar multas de veículos abaixo de 2020
+-- Selecionar multas de veículos abaixo de 2020 -------------------------------------------------------------------------------
 DELIMITER //
 CREATE PROCEDURE VeiculosAnoAbaixo(ano_parametro int)
 BEGIN
@@ -179,10 +250,7 @@ END;
 
 call VeiculosAnoAbaixo(2020);
 
--- Selecionar todos os veículos com multas pendentes
--- --------------------------------------------------
-
--- Inserir um novo proprietário
+-- Inserir um novo proprietário -------------------------------------------------------------------------------------------------
 DELIMITER //
 CREATE PROCEDURE InserirProprietario(nome varchar(50), cpf varchar(11), endereco varchar(255), telefone varchar(15), pontos_carteira int)
 BEGIN
@@ -194,7 +262,7 @@ call InserirProprietario("Mariana Marques", "12799877600", "Rua ABC, 24", "(11) 
 
 select * from proprietarios;
 
--- Atualizar informações de um proprietário
+-- Atualizar informações de um proprietário --------------------------------------------------------------------------------------
 DELIMITER //
 CREATE PROCEDURE AtualizarProprietario(id_parametro int, nome varchar(50), cpf varchar(11), endereco varchar(255), telefone varchar(15), pontos_carteira int)
 BEGIN
@@ -214,24 +282,106 @@ call AtualizarProprietario(1, "Mariana Marques", "12729877600", "Rua ABC, 24", "
 
 select * from proprietarios;
 
--- Deletar um proprietário
-select * from veiculos;
-select * from licenciamentos;
-select * from multas;
+-- Deletar um proprietário --------------------------------------------------------------------------------------------------------
+
+alter table proprietarios add column user_ativo int;
+update proprietarios set user_ativo = 1;
+
+DELIMITER //
+CREATE PROCEDURE deletarProprietario(id_parametro int)
+BEGIN
+	update proprietarios set user_ativo = 0 where id = id_parametro;
+END;
+// DELIMITER ;
+
+call deletarProprietario(4);
+
 select * from proprietarios;
-select * from infracoes;
 
 
--- Selecionar todos os proprietários
+-- Selecionar todos os proprietários ----------------------------------------------------------------------------------------------
 
--- Inserir uma nova infração
+DELIMITER //
+CREATE PROCEDURE selecionarProprietarios()
+BEGIN
+	select * from proprietarios;
+END;
+// DELIMITER ;
 
--- Atualizar informações de uma infração
+-- Inserir uma nova infração ------------------------------------------------------------------------------------------------------
 
--- Deletar uma infração
+DELIMITER //
+CREATE PROCEDURE inserirInfracao(descricao varchar(255), gravidade varchar(10), data_ocorrencia date, veiculo_id int)
+BEGIN
+	insert into infracoes(descricao, gravidade, data_ocorrencia, veiculo_id) values (descricao, gravidade, data_ocorrencia, veiculo_id);
+END;
+// DELIMITER ;
 
--- Selecionar todas as infrações
+call inserirInfracao("Parar veiculo em via de alta velocidade", "Grave", '2024-08-20', 2);
 
--- Inserir um novo licenciamento
+-- Atualizar informações de uma infração ------------------------------------------------------------------------------------------
 
--- Atualizar informações de um licenciamento
+DELIMITER //
+CREATE PROCEDURE atualizarInfracao(id_parametro int, descricao varchar(255), gravidade varchar(10), data_ocorrencia date, veiculo_id int)
+BEGIN
+	update infracoes 
+    set descricao = descricao,
+    gravidade = gravidade,
+    data_ocorrencia = data_ocorrencia,
+    veiculo_id = veiculo_id
+    where id = id_parametro;
+END;
+// DELIMITER ;
+
+call atualizarInfracao(11, "Parar veiculo em via de alta velocidade", "Grave", '2024-08-20', 2);
+
+-- Deletar uma infração -----------------------------------------------------------------------------------------------------------
+
+DELIMITER //
+CREATE PROCEDURE deletarInfracao(id_parametro int)
+BEGIN
+	delete from infracoes where id = id_parametro;
+END;
+// DELIMITER ;
+
+call deletarInfracao(11);
+
+-- Selecionar todas as infrações --------------------------------------------------------------------------------------------------
+
+DELIMITER //
+CREATE PROCEDURE verInfracoes()
+BEGIN
+	select * from infracoes;
+END;
+// DELIMITER ;
+
+call verInfracoes;
+
+-- Inserir um novo licenciamento --------------------------------------------------------------------------------------------------
+
+DELIMITER //
+CREATE PROCEDURE inserirLicenciamento(data_validade date, veiculo_id int)
+BEGIN
+	insert into licenciamentos (data_validade, veiculo_id) values (data_validade, veiculo_id);
+END;
+// DELIMITER ;
+
+call inserirLicenciamento('2024-08-20', 3);
+
+
+-- Atualizar informações de um licenciamento --------------------------------------------------------------------------------------
+
+DELIMITER //
+CREATE PROCEDURE atualizarLicenciamento(id_parametro int, data_validade date, veiculo_id int)
+BEGIN
+	update licenciamentos
+    set data_validade = data_validade,
+    veiculo_id = veiculo_id
+    where id = id_parametro;
+END;
+// DELIMITER ;
+
+call atualizarLicenciamento(2, '2024-08-20', 2);
+
+select * from licenciamentos;
+
